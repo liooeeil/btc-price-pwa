@@ -1,6 +1,6 @@
 # Telegram 到价提醒
 
-本功能由 Cloudflare Worker 在服务器端检查 OKX 行情。手机网页关闭后，Worker 仍按分钟检查启用的条件，并只在条件触发时通过 Telegram 发消息。页面里的提醒配置保存在 Cloudflare KV，不依赖手机继续运行。
+本功能由 Cloudflare Worker 在服务器端检查 OKX 行情。手机网页关闭后，Worker 仍按提醒周期检查已明确配置的合约，并只在条件触发时通过 Telegram 发消息。每个合约单独保存策略；单纯加入自选不会启用提醒。页面里的提醒配置保存在 Cloudflare KV，不依赖手机继续运行。
 
 ## 一、创建 Telegram 机器人
 
@@ -14,18 +14,18 @@
 ### 用 Cloudflare 网页控制台
 
 1. 登录 Cloudflare，打开 Workers & Pages，创建一个 Worker。
-2. 进入 Worker 的 Edit code，用 worker/worker-single.js 的全部内容替换示例代码，然后部署。
+2. 进入 Worker 的 Edit code，用本目录 `telegram-worker.js` 的全部内容替换示例代码，然后部署。
 3. 在 Storage & Databases → KV 新建一个 KV namespace。
 4. 回到 Worker 的 Settings → Bindings，新增 KV namespace binding：变量名填写 ALERT_KV，namespace 选刚创建的那个。
 5. 在 Settings → Variables and Secrets 添加两个类型为 Secret 的值：
    - ADMIN_KEY：自己生成一段足够长的随机管理密钥。
    - TELEGRAM_BOT_TOKEN：BotFather 返回的令牌。
-6. 在 Settings → Triggers → Cron Triggers 添加 * * * * *，让 Worker 每分钟检查一次。
+6. 在 Settings → Triggers → Cron Triggers 添加两条 UTC 定时规则：`59 3,5,7,11,15,17,19,23 * * *` 和 `2 0,4,6,8,12,16,18,20 * * *`。它们对应北京时间每个 4 小时收盘前 1 分钟和收盘后 2 分钟；启用 6 小时分型时，也覆盖 6 小时收盘点（额外如 01:59/02:02、13:59/14:02）。
 7. 保存设置并重新部署。Worker 地址类似 https://tide-btc-alerts.<你的子域>.workers.dev。
 
 ### 用 Wrangler 命令行
 
-本目录也含有 worker.js、alert-rules.js 和 wrangler.jsonc。创建 KV namespace 后，把 wrangler.jsonc 里的 REPLACE_WITH_YOUR_KV_NAMESPACE_ID 换成 Cloudflare 返回的 ID，然后在此目录登录并部署：
+如需用 Wrangler 部署，请使用主发布包中的 `worker/` 目录（含 `worker.js`、`alert-rules.js` 和 `wrangler.jsonc`）。先创建 KV namespace，并把 `wrangler.jsonc` 里的 `REPLACE_WITH_YOUR_KV_NAMESPACE_ID` 换成 Cloudflare 返回的 ID，再在该目录运行：
 
     npx wrangler login
     npx wrangler secret put ADMIN_KEY
@@ -42,7 +42,7 @@
 4. 点击 绑定 Telegram 并发送测试。Worker 会绑定这个私聊并发一条测试消息。
 5. 确认 Telegram 收到测试消息。之后只有规则触发时才会发行情提醒；不会定时推送价格。
 
-服务器提醒最多检查观察列表中的前 8 个品种，以适配 Cloudflare Workers 免费计划的每次运行外部请求数限制。页面本地提醒仍按页面原有方式工作。
+全部策略关闭时，Worker 会在读取 KV 配置后立即返回，不请求行情；任一策略开启时，仅检查明确启用提醒的合约，不会因为加入自选而监控该合约。常规策略在每个 4 小时收盘前约 1 分钟、收盘后约 2 分钟检查；启用 6 小时分型后，还会在额外的 6 小时收盘点各检查一次。最多支持 8 个已配置提醒的合约。网页保持打开时，本地提醒也只检查当前选择的合约，并按对应收盘时间检查。
 
 ## 安全和故障排查
 
@@ -51,5 +51,5 @@
 - /api/health 可用于确认 Worker 已部署。它不会返回任何密钥。
 - 页面显示跨域错误时，确认 Worker 对 GitHub Pages 域名启用了 CORS，并已部署最新代码。
 - 点绑定时提示尚未收到 /start，回到机器人私聊发送 /start 后再试。
-- 定时规则由 Cloudflare 按 UTC 调度，每分钟触发；实际提醒时间会有少量调度和行情接口延迟。
+- 定时规则由 Cloudflare 按 UTC 调度，换算为北京时间；实际提醒时间会有少量调度和行情接口延迟。
 - Telegram 通知是否显示在锁屏，还取决于 iPhone/iPad 的 Telegram 通知权限和专注模式设置。

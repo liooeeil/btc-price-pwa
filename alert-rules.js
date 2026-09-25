@@ -8,6 +8,9 @@
     emaCross1w: 7 * 24 * 60 * 60,
     flat1d: 24 * 60 * 60,
     flat3d: 3 * 24 * 60 * 60,
+    fractal6h: 6 * 60 * 60,
+    fractal1d: 24 * 60 * 60,
+    fractal1w: 7 * 24 * 60 * 60,
   };
 
   function confirmed(bars) {
@@ -113,12 +116,47 @@
     return events;
   }
 
+  // Keep the alert definition aligned with the chart's 3-candle top/bottom fractals.
+  function fractalEvents(bars, strategy, includeCurrent = false, lookback = 20) {
+    const data = includeCurrent ? evaluationBars(bars) : confirmed(bars);
+    const count = Math.max(1, Math.min(500, Math.round(Number(lookback) || 20)));
+    const events = [];
+    for (let i = Math.max(count, 1); i < data.length; i++) {
+      const a = data[i - 2], middle = data[i - 1], c = data[i];
+      if (!a || !middle || !c || (!includeCurrent && String(c.confirm) !== '1')) continue;
+      const past = data.slice(i - 1 - count, i - 1);
+      if (past.length < count) continue;
+      const high = Math.max(...past.map((bar) => bar.high));
+      const low = Math.min(...past.map((bar) => bar.low));
+      const top = middle.high > high && middle.high > a.high && middle.high > c.high &&
+        c.close < middle.open && c.close < middle.close && c.close < c.open;
+      const bottom = middle.low < low && middle.low < a.low && middle.low < c.low &&
+        c.close > middle.open && c.close > middle.close && c.close > c.open;
+      for (const [isMatch, direction, pivotPrice] of [[top, 'top', middle.high], [bottom, 'bottom', middle.low]]) {
+        if (!isMatch) continue;
+        events.push({
+          strategy,
+          direction,
+          time: c.time,
+          pivotTime: middle.time,
+          closeTime: c.time + SECONDS[strategy],
+          close: c.close,
+          pivotPrice,
+        });
+      }
+    }
+    return events;
+  }
+
   function events(strategy, bars, options = {}) {
     if (strategy === 'emaCross' || strategy === 'emaCross4h' || strategy === 'emaCross1d' || strategy === 'emaCross1w') {
       return emaCrossEvents(bars, strategy, !!options.includeCurrent);
     }
     if (strategy === 'flat1d') return flatEvents(bars, { ...options, timeframe: '1D' });
     if (strategy === 'flat3d') return flatEvents(bars, { ...options, timeframe: '3D' });
+    if (strategy === 'fractal6h' || strategy === 'fractal1d' || strategy === 'fractal1w') {
+      return fractalEvents(bars, strategy, !!options.includeCurrent, options.lookback);
+    }
     return [];
   }
 
@@ -126,5 +164,5 @@
     return events(strategy, bars, { ...options, includeCurrent: true });
   }
 
-  root.TideAlertRules = { SECONDS, confirmed, evaluationBars, ema, smooth, emaCrossEvents, flatMetricsAt, flatEvents, events, previewEvents };
+  root.TideAlertRules = { SECONDS, confirmed, evaluationBars, ema, smooth, emaCrossEvents, flatMetricsAt, flatEvents, fractalEvents, events, previewEvents };
 })(globalThis);

@@ -1,9 +1,21 @@
-const CACHE_NAME = 'tide-btc-shell-v5';
-const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './alert-rules.js', './alert-runtime.js', './icon-180.png', './icon-192.png', './icon-512.png', './icon-maskable-512.png'];
+const CACHE_NAME = 'tide-btc-shell-v6';
+const APP_SHELL = [
+  './',
+  './index.html',
+  './manifest.webmanifest',
+  './alert-rules.js',
+  './alert-runtime.js',
+  './icon-180.png',
+  './icon-192.png',
+  './icon-512.png',
+  './icon-maskable-512.png'
+];
+
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
   self.skipWaiting();
 });
+
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys();
@@ -11,10 +23,12 @@ self.addEventListener('activate', (event) => {
     await self.clients.claim();
   })());
 });
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
+
   if (request.mode === 'navigate') {
     event.respondWith((async () => {
       try {
@@ -30,6 +44,7 @@ self.addEventListener('fetch', (event) => {
     })());
     return;
   }
+
   event.respondWith((async () => {
     const cached = await caches.match(request);
     if (cached) return cached;

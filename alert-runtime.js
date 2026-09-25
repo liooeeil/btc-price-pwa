@@ -3,12 +3,13 @@
 
   const RULES = globalThis.TideAlertRules;
   const SETTINGS_KEY = 'tide:alerts:settings:v1';
+  const SYMBOL_SETTINGS_KEY = 'tide:alerts:settings-by-symbol:v1';
   const CHECKPOINT_KEY = 'tide:alerts:checked:v1';
-  const SETTINGS_VERSION = 2;
+  const SETTINGS_VERSION = 3;
   const INITIAL_EMA_WINDOW_SECONDS = 6 * 60 * 60;
   const PREALERT_SECONDS = 60;
   const defaultSettings = {
-    enabled: { emaCross4h: false, emaCross1d: false, emaCross1w: false, flat1d: false, flat3d: false },
+    enabled: { emaCross4h: false, emaCross1d: false, emaCross1w: false, flat1d: false, flat3d: false, fractal6h: false, fractal1d: false, fractal1w: false },
     spreadPct: { flat1d: 0.5, flat3d: 1 },
     slopePct: { flat1d: 0.4, flat3d: 0.3 },
     bodyDistancePct: { flat1d: 1.5, flat3d: 3 },
@@ -16,20 +17,16 @@
     serverKey: '',
   };
   const rawSavedSettings = readStored(SETTINGS_KEY);
-  const savedSettings = { ...defaultSettings, ...rawSavedSettings };
-  let settings = {
-    ...defaultSettings,
-    ...savedSettings,
-    enabled: { ...defaultSettings.enabled, ...savedSettings.enabled },
-    spreadPct: { ...defaultSettings.spreadPct, ...savedSettings.spreadPct },
-    slopePct: { ...defaultSettings.slopePct, ...savedSettings.slopePct },
-    bodyDistancePct: { ...defaultSettings.bodyDistancePct, ...savedSettings.bodyDistancePct },
-  };
-  let migratedSettings = Number(rawSavedSettings.schemaVersion || 0) < SETTINGS_VERSION;
-  if (rawSavedSettings.enabled?.emaCross4h == null && rawSavedSettings.enabled?.emaCross != null) {
-    settings.enabled.emaCross4h = !!savedSettings.enabled.emaCross;
+  const settingsBySymbol = readStored(SYMBOL_SETTINGS_KEY);
+  const initialSymbol = document.querySelector('#symbol')?.value || 'BTC-USDT-SWAP';
+  const migratedSettings = !Object.keys(settingsBySymbol).length && Object.keys(rawSavedSettings).length > 0;
+  const sharedSettings = { serverUrl: rawSavedSettings.serverUrl || '', serverKey: rawSavedSettings.serverKey || '' };
+  const initialSavedSettings = settingsBySymbol[initialSymbol] || (migratedSettings ? rawSavedSettings : {});
+  const savedSettings = { ...defaultSettings, ...initialSavedSettings };
+  let settings = makeSymbolSettings(initialSavedSettings);
+  if (rawSavedSettings.enabled?.emaCross4h == null && rawSavedSettings.enabled?.emaCross != null && migratedSettings) {
+    settings.enabled.emaCross4h = !!rawSavedSettings.enabled.emaCross;
   }
-  delete settings.enabled.emaCross;
   if (migratedSettings) {
     const previousDefaults = {
       spreadPct: { flat1d: 1, flat3d: 1 },
@@ -45,7 +42,9 @@
       }
     }
   }
-  settings.schemaVersion = SETTINGS_VERSION;
+  settings.serverUrl = sharedSettings.serverUrl;
+  settings.serverKey = sharedSettings.serverKey;
+  let currentSymbol = initialSymbol;
   let checkpoints = read(CHECKPOINT_KEY, {});
   let prechecked = read('tide:alerts:prechecked:v1', {});
   let checking = false;
@@ -71,20 +70,51 @@
   }
   function save() {
     settings.schemaVersion = SETTINGS_VERSION;
-    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch {}
+    settingsBySymbol[currentSymbol] = {
+      enabled: { ...settings.enabled },
+      spreadPct: { ...settings.spreadPct },
+      slopePct: { ...settings.slopePct },
+      bodyDistancePct: { ...settings.bodyDistancePct },
+    };
+    try {
+      localStorage.setItem(SYMBOL_SETTINGS_KEY, JSON.stringify(settingsBySymbol));
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ schemaVersion: SETTINGS_VERSION, ...sharedSettings }));
+    } catch {}
+  }
+  function makeSymbolSettings(raw = {}) {
+    return {
+      ...defaultSettings,
+      ...raw,
+      enabled: { ...defaultSettings.enabled, ...(raw.enabled || {}) },
+      spreadPct: { ...defaultSettings.spreadPct, ...(raw.spreadPct || {}) },
+      slopePct: { ...defaultSettings.slopePct, ...(raw.slopePct || {}) },
+      bodyDistancePct: { ...defaultSettings.bodyDistancePct, ...(raw.bodyDistancePct || {}) },
+      serverUrl: sharedSettings?.serverUrl || '',
+      serverKey: sharedSettings?.serverKey || '',
+    };
   }
   function number(value, fallback) {
     const result = Number(value);
     return Number.isFinite(result) ? result : fallback;
   }
   function symbols() {
-    return [...document.querySelectorAll('#symbol option')].map((option) => option.value).filter(Boolean).slice(0, 100);
+    const symbol = document.querySelector('#symbol')?.value || currentSymbol;
+    return symbol ? [symbol] : [];
   }
-  function strategyOptions(strategy) {
+  function fractalLookback(strategy, symbol = currentSymbol) {
+    const chartBar = ({ fractal6h: '6H', fractal1d: '1D', fractal1w: '1W' })[strategy];
+    if (!chartBar) return 20;
+    try {
+      const saved = JSON.parse(localStorage.getItem(`tide:${symbol}:${chartBar}:settings`) || '{}');
+      return Math.max(1, Math.min(500, Math.round(Number(saved.fractalLookback) || 20)));
+    } catch { return 20; }
+  }
+  function strategyOptions(strategy, symbol = currentSymbol) {
     return {
       slopePct: number(settings.slopePct?.[strategy], strategy === 'flat1d' ? 0.4 : 0.3),
       spreadPct: number(settings.spreadPct?.[strategy], strategy === 'flat1d' ? 0.5 : 1),
       bodyDistancePct: number(settings.bodyDistancePct?.[strategy], strategy === 'flat1d' ? 1.5 : 3),
+      lookback: fractalLookback(strategy, symbol),
     };
   }
   function makePanel() {
@@ -93,8 +123,9 @@
     const card = document.createElement('section');
     card.className = 'card side-card tide-alert-card';
     card.innerHTML = `
-      <button class="alert-title alert-card-toggle" type="button" aria-expanded="true" aria-controls="alertCardContent"><span>价格提醒 <small>ALERTS</small></span><span class="alert-page-status" id="alertLocalStatus">页面提醒已就绪</span></button>
+      <button class="alert-title alert-card-toggle" type="button" aria-expanded="true" aria-controls="alertCardContent"><span>价格提醒 <small>ALERTS</small></span><span class="alert-page-status" id="alertInstrumentStatus"></span><span class="alert-page-status" id="alertLocalStatus">页面提醒已就绪</span></button>
       <div class="alert-card-content" id="alertCardContent">
+      <p class="alert-scope">当前合约单独保存提醒。加入自选不会自动开启；切换合约后可分别设置。</p>
       <div class="alert-strategy" data-strategy="emaCross4h">
         <div class="alert-strategy-head"><button class="alert-collapse" type="button" aria-expanded="false">4H EMA 5 / 20 交叉 <small>预收盘 · 1 分钟</small></button><label class="alert-enable"><input class="switch alert-switch" type="checkbox" data-alert-enable="emaCross4h">开启</label></div>
         <div class="alert-strategy-body"><p>收盘前约 1 分钟，根据当前 K 线价格预判 EMA 5 / 20 上穿或下穿；若未触发，收盘后约 2 分钟补查。</p></div>
@@ -115,6 +146,18 @@
         <div class="alert-strategy-head"><button class="alert-collapse" type="button" aria-expanded="false">3 日线 SMA 走平 <small>预收盘 · 1 分钟</small></button><label class="alert-enable"><input class="switch alert-switch" type="checkbox" data-alert-enable="flat3d">开启</label></div>
         <div class="alert-strategy-body"><p>收盘前约 1 分钟，用当前 K 线价格按 3 日线规则计算；若未触发，收盘后约 2 分钟补查。</p><label class="alert-threshold">三线变动率上限 <input type="number" min="0" max="20" step="0.1" data-slope="flat3d"> %</label><label class="alert-threshold">SMA 5 / 13 间距 <input type="number" min="0" max="20" step="0.1" data-spread="flat3d"> %</label><label class="alert-threshold">收盘价距 SMA 5 <input type="number" min="0" max="20" step="0.1" data-body-distance="flat3d"> %</label></div>
       </div>
+      <div class="alert-strategy" data-strategy="fractal6h">
+        <div class="alert-strategy-head"><button class="alert-collapse" type="button" aria-expanded="false">6 小时顶 / 底分型 <small>收盘确认</small></button><label class="alert-enable"><input class="switch alert-switch" type="checkbox" data-alert-enable="fractal6h">开启</label></div>
+        <div class="alert-strategy-body"><p>顶、底分型分别提醒，按形态页规则以第三根 K 线收盘确认。</p></div>
+      </div>
+      <div class="alert-strategy" data-strategy="fractal1d">
+        <div class="alert-strategy-head"><button class="alert-collapse" type="button" aria-expanded="false">日线顶 / 底分型 <small>收盘确认</small></button><label class="alert-enable"><input class="switch alert-switch" type="checkbox" data-alert-enable="fractal1d">开启</label></div>
+        <div class="alert-strategy-body"><p>顶、底分型分别提醒，使用形态页的前序比较规则。</p></div>
+      </div>
+      <div class="alert-strategy" data-strategy="fractal1w">
+        <div class="alert-strategy-head"><button class="alert-collapse" type="button" aria-expanded="false">周线顶 / 底分型 <small>收盘确认</small></button><label class="alert-enable"><input class="switch alert-switch" type="checkbox" data-alert-enable="fractal1w">开启</label></div>
+        <div class="alert-strategy-body"><p>顶、底分型分别提醒，使用形态页的前序比较规则。</p></div>
+      </div>
       <div class="alert-server">
         <strong>服务器推送 · Telegram</strong>
         <label>Worker 地址<input type="url" id="alertServerUrl" placeholder="https://你的服务.workers.dev"></label>
@@ -122,7 +165,7 @@
         <button type="button" class="action" id="alertSyncServer">保存并同步服务器策略</button>
         <button type="button" class="action" id="alertTelegramConnect">绑定 Telegram 并发送测试</button>
         <span id="alertServerStatus">填入 Worker 地址和密钥后即可同步</span>
-        <p>先在 Telegram 向机器人发送 /start，再点“绑定 Telegram 并发送测试”。服务器会在 K 线收盘前约 1 分钟预判，并在收盘后约 2 分钟补查；服务器提醒最多监控观察列表前 8 个品种。</p>
+        <p>提醒开关按当前合约分别保存；加入自选不会自动开启提醒。先在 Telegram 向机器人发送 /start，再点“绑定 Telegram 并发送测试”。</p>
       </div>
       <div class="alert-log-head"><strong>最近提醒</strong><button type="button" id="alertClearLog">清除</button></div>
       <ol class="alert-log" id="alertLog" aria-live="polite"><li class="alert-empty">还没有触发提醒</li></ol>
@@ -130,6 +173,7 @@
     const css = document.createElement('style');
     css.textContent = `
       .tide-alert-card{padding:16px}.alert-title,.alert-strategy-head,.alert-log-head{display:flex;align-items:center;justify-content:space-between;gap:8px}.alert-title{font-size:12px;font-weight:700;margin-bottom:10px}.alert-title small,.alert-collapse small{color:var(--muted);font:9px 'DM Mono';font-weight:400}.alert-page-status,#alertServerStatus{font-size:9px;color:var(--muted)}.alert-strategy{border-top:1px solid var(--line);padding:8px 0}.alert-collapse{padding:2px 0;text-align:left;border:0;background:transparent;color:#dce5e2;font-size:11px;font-weight:600}.alert-enable{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:10px;white-space:nowrap}.alert-enable .alert-switch{width:31px;height:17px;min-width:31px;margin:0;flex:0 0 31px;accent-color:#62bd8e}.alert-strategy-body{padding:4px 0 2px}.alert-strategy-body p,.alert-server p{margin:3px 0 6px;color:var(--muted);font-size:10px;line-height:1.6}.alert-strategy-body{max-height:900px;opacity:1;overflow:hidden;transition:max-height .42s cubic-bezier(.2,.72,.2,1),opacity .25s ease,transform .32s ease}.alert-strategy.collapsed .alert-strategy-body{max-height:0;opacity:0;transform:translateY(-5px);padding-top:0;padding-bottom:0}.alert-collapse:before{content:'−';display:inline-block;width:15px;color:var(--muted);font:13px 'DM Mono'}.alert-strategy.collapsed .alert-collapse:before{content:'+'}.alert-threshold{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:10px}.alert-threshold input{width:58px;padding:5px 6px;border:1px solid #342a27;border-radius:6px;background:#100e0d;color:var(--text);font:11px 'DM Mono'}.alert-server{display:grid;gap:7px;border-top:1px solid var(--line);padding-top:11px;margin-top:4px}.alert-server strong,.alert-log-head strong{font-size:10px}.alert-server label{display:grid;gap:4px;color:var(--muted);font-size:9px}.alert-server input{width:100%;padding:7px 8px;border:1px solid #342a27;border-radius:6px;background:#100e0d;color:var(--text);font:10px 'DM Mono'}.alert-server .action{font-size:10px;padding:7px;border-color:#304148}.alert-log-head{padding-top:11px;margin-top:8px;border-top:1px solid var(--line)}.alert-log-head button{color:var(--muted);font-size:9px}.alert-log{margin:5px 0 0;padding-left:17px;color:#dce5e2;font-size:10px;line-height:1.65}.alert-log li{padding:2px 0}.alert-empty{list-style:none;margin-left:-17px;color:var(--muted)}.alert-toast{position:fixed;right:18px;bottom:18px;z-index:1000;max-width:min(380px,calc(100vw - 36px));padding:11px 15px;border:1px solid #5a876e;border-radius:8px;background:#13251c;color:#c9f1d8;box-shadow:0 8px 28px #0008;font-size:12px;opacity:0;transform:translateY(8px);pointer-events:none;transition:.2s}.alert-toast.show{opacity:1;transform:translateY(0)}#ohlcLegend{position:absolute;z-index:9;top:8px;left:12px;display:flex;flex-wrap:wrap;gap:7px 12px;max-width:calc(100% - 72px);padding:3px 0;color:#a5b2b4;font:10px 'DM Mono';pointer-events:none;text-shadow:0 1px 3px #0a0e12}.ohlc-item{white-space:nowrap}.ohlc-item b{font-weight:500;color:#e6eceb;font-variant-numeric:tabular-nums}.ohlc-item.close-up b{color:var(--green)}.ohlc-item.close-down b{color:var(--red)}.alert-candidate-legend{color:#e4bb76;font-size:9px;margin-left:4px}@media(max-width:620px){.tide-alert-card{padding:13px}.alert-toast{right:10px;bottom:10px}#ohlcLegend{left:8px;top:6px;gap:5px 8px;font-size:9px}}`;
+    css.textContent += `.alert-scope{margin:0 0 7px;color:var(--muted);font-size:9px;line-height:1.5}.alert-title{flex-wrap:wrap}`;
     css.textContent += `.alert-card-toggle{width:100%;padding:0;border:0;background:transparent;color:var(--text);cursor:pointer;text-align:left}.alert-card-toggle:after{content:'−';margin-left:10px;color:var(--muted);font:16px 'DM Mono'}.tide-alert-card.collapsed{padding-bottom:14px}.alert-card-content{max-height:2600px;opacity:1;transform:translateY(0);overflow:hidden;transition:max-height .52s cubic-bezier(.2,.72,.2,1),opacity .3s ease,transform .36s ease}.tide-alert-card.collapsed .alert-card-content{display:block;max-height:0;opacity:0;transform:translateY(-8px);pointer-events:none}.tide-alert-card.collapsed .alert-card-toggle:after{content:'+'}`;
     document.head.append(css);
     const averageCard = side.querySelector('.toggle-list')?.closest('.side-card');
@@ -184,8 +228,39 @@
       save();
       updateCandidateMarkers();
       scheduleServerSync();
-      runLocalCheck();
+      scheduleLocalCheck();
     }));
+    const symbolSelect = document.querySelector('#symbol');
+    const instrumentStatus = card.querySelector('#alertInstrumentStatus');
+    const showCurrentInstrument = () => {
+      if (instrumentStatus) instrumentStatus.textContent = `当前 ${currentSymbol.replace(/-USDT-SWAP$/, '')}`;
+    };
+    showCurrentInstrument();
+    symbolSelect?.addEventListener('change', () => {
+      save();
+      currentSymbol = symbolSelect.value;
+      settings = makeSymbolSettings(settingsBySymbol[currentSymbol] || {});
+      for (const [name, enabled] of Object.entries(settings.enabled)) {
+        const input = card.querySelector(`[data-alert-enable="${name}"]`);
+        if (input) input.checked = !!enabled;
+      }
+      for (const [field, attribute] of [['spreadPct', 'spread'], ['slopePct', 'slope'], ['bodyDistancePct', 'body-distance']]) {
+        for (const [name, value] of Object.entries(settings[field])) {
+          const input = card.querySelector(`[data-${attribute}="${name}"]`);
+          if (input) input.value = value;
+        }
+      }
+      showCurrentInstrument();
+      updateCandidateMarkers();
+      scheduleLocalCheck();
+      scheduleServerSync();
+    });
+    document.querySelectorAll('.tab[data-bar]').forEach((button) => button.addEventListener('click', () => {
+      if (settings.serverUrl && settings.serverKey) scheduleServerSync();
+    }));
+    document.querySelector('#fractalLookback')?.addEventListener('change', () => {
+      if (settings.serverUrl && settings.serverKey) scheduleServerSync();
+    });
     card.querySelectorAll('[data-spread]').forEach((input) => input.addEventListener('change', () => {
       const value = Math.min(20, Math.max(.1, number(input.value, 1)));
       input.value = String(value);
@@ -213,6 +288,8 @@
     for (const selector of ['#alertServerUrl', '#alertServerKey']) card.querySelector(selector).addEventListener('change', () => {
       settings.serverUrl = card.querySelector('#alertServerUrl').value.trim();
       settings.serverKey = card.querySelector('#alertServerKey').value;
+      sharedSettings.serverUrl = settings.serverUrl;
+      sharedSettings.serverKey = settings.serverKey;
       save();
     });
     card.querySelector('#alertSyncServer').onclick = syncServer;
@@ -279,8 +356,11 @@
       emaCross1w: '周线 EMA 5/20 交叉',
       flat1d: '日线 SMA 走平',
       flat3d: '3日线 SMA 走平',
+      fractal6h: '6 小时分型',
+      fractal1d: '日线分型',
+      fractal1w: '周线分型',
     };
-    const direction = event.direction === 'up' ? '向上交叉' : event.direction === 'down' ? '向下交叉' : '';
+    const direction = event.direction === 'up' ? '向上交叉' : event.direction === 'down' ? '向下交叉' : event.direction === 'top' ? '顶分型' : event.direction === 'bottom' ? '底分型' : '';
     const timing = event.preclose ? '收盘前 1 分钟 · ' : '';
     const priceLabel = event.preclose ? '预收盘参考价' : '收盘';
     const message = `${symbol.replace('-USDT-SWAP', '')} · ${names[event.strategy]} ${direction} · ${timing}${priceLabel} ${format(event.close)}`;
@@ -308,6 +388,9 @@
       emaCross1w: '1Wutc',
       flat1d: '1Dutc',
       flat3d: '3Dutc',
+      fractal6h: '6H',
+      fractal1d: '1Dutc',
+      fractal1w: '1Wutc',
     })[strategy];
   }
   async function fetchAlertBars(symbol, timeframe) {
@@ -343,16 +426,21 @@
       const eligible = RULES.events(strategy, data, strategyOptions(strategy)).filter((event) => {
         if (event.closeTime > now) return false;
         if (previous) return event.time > previous;
-        return strategy.startsWith('emaCross') && event.time === latest.time && event.closeTime >= now - INITIAL_EMA_WINDOW_SECONDS;
+        const recentWindow = strategy.startsWith('emaCross') ? INITIAL_EMA_WINDOW_SECONDS : RULES.SECONDS[strategy];
+        return (strategy.startsWith('emaCross') || strategy.startsWith('fractal')) && event.time === latest.time && event.closeTime >= now - recentWindow;
       });
       for (const event of eligible) if (Number(prechecked[key] || 0) !== event.time) notifyLocal(symbol, event);
       checkpoints[key] = latest.time;
     }
     try { localStorage.setItem(CHECKPOINT_KEY, JSON.stringify(checkpoints)); } catch {}
   }
-  async function runLocalCheck() {
+  async function runLocalCheck({ sixHourOnly = false, sixHourWindow = false } = {}) {
     if (checking || !RULES) return;
-    const active = Object.keys(settings.enabled || {}).filter((strategy) => settings.enabled[strategy]);
+    const active = Object.keys(settings.enabled || {}).filter((strategy) =>
+      settings.enabled[strategy] &&
+      (!sixHourOnly || strategy === 'fractal6h') &&
+      (strategy !== 'fractal6h' || sixHourWindow),
+    );
     if (!active.length) {
       const status = document.querySelector('#alertLocalStatus');
       if (status) status.textContent = '页面提醒已关闭';
@@ -372,14 +460,68 @@
     } finally { checking = false; }
   }
 
+  function scheduleLocalCheck() {
+    clearTimeout(localTimer);
+    const active = Object.values(settings.enabled || {}).some(Boolean);
+    const status = document.querySelector('#alertLocalStatus');
+    if (!active) {
+      if (status) status.textContent = '页面提醒已关闭';
+      return;
+    }
+    const regular = [
+      ...[3, 7, 11, 15, 19, 23].map((hour) => ({ hour, minute: 59, sixHourOnly: false, sixHourWindow: [23, 11].includes(hour) })),
+      ...[0, 4, 8, 12, 16, 20].map((hour) => ({ hour, minute: 2, sixHourOnly: false, sixHourWindow: [0, 12].includes(hour) })),
+    ];
+    const sixHourOnly = settings.enabled.fractal6h ? [
+      { hour: 5, minute: 59, sixHourOnly: true, sixHourWindow: true },
+      { hour: 17, minute: 59, sixHourOnly: true, sixHourWindow: true },
+      { hour: 6, minute: 2, sixHourOnly: true, sixHourWindow: true },
+      { hour: 18, minute: 2, sixHourOnly: true, sixHourWindow: true },
+    ] : [];
+    const now = Date.now();
+    const today = new Date();
+    let next = null;
+    for (let offset = 0; offset <= 1; offset++) {
+      for (const item of [...regular, ...sixHourOnly]) {
+        const when = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + offset, item.hour, item.minute);
+        if (when > now && (next == null || when < next.when)) next = { ...item, when };
+      }
+    }
+    if (!next) return;
+    if (status) status.textContent = `页面提醒待检查 · ${new Date(next.when).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai' })}`;
+    localTimer = setTimeout(() => {
+      runLocalCheck(next).finally(scheduleLocalCheck);
+    }, Math.max(0, next.when - now));
+  }
+
   function serverPayload() {
+    const configs = {};
+    for (const [symbol, config] of Object.entries(settingsBySymbol)) {
+      if (Object.values(config.enabled || {}).some(Boolean)) configs[symbol] = {
+        ...config,
+        fractalLookbacks: {
+          fractal6h: fractalLookback('fractal6h', symbol),
+          fractal1d: fractalLookback('fractal1d', symbol),
+          fractal1w: fractalLookback('fractal1w', symbol),
+        },
+      };
+    }
+    if (Object.values(settings.enabled || {}).some(Boolean)) {
+      configs[currentSymbol] = {
+        enabled: { ...settings.enabled },
+        spreadPct: { ...settings.spreadPct },
+        slopePct: { ...settings.slopePct },
+        bodyDistancePct: { ...settings.bodyDistancePct },
+        fractalLookbacks: {
+          fractal6h: fractalLookback('fractal6h', currentSymbol),
+          fractal1d: fractalLookback('fractal1d', currentSymbol),
+          fractal1w: fractalLookback('fractal1w', currentSymbol),
+        },
+      };
+    }
     return {
       schemaVersion: SETTINGS_VERSION,
-      enabled: { ...settings.enabled },
-      spreadPct: { ...settings.spreadPct },
-      slopePct: { ...settings.slopePct },
-      bodyDistancePct: { ...settings.bodyDistancePct },
-      symbols: symbols().slice(0, 8),
+      configs,
     };
   }
   async function syncServer() {
@@ -402,7 +544,7 @@
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-      if (status) status.textContent = `已同步 · ${body.symbols ?? symbols().length} 个品种`;
+      if (status) status.textContent = `已同步 · ${body.symbols ?? Object.keys(serverPayload().configs).length} 个已设置提醒的合约`;
     } catch (error) {
       if (status) status.textContent = `同步失败：${error.message}`;
     }
@@ -467,7 +609,6 @@
   addOhlcOverlay();
   hookChartRefresh();
   updateCandidateMarkers();
-  runLocalCheck();
-  localTimer = setInterval(runLocalCheck, 60 * 1000);
-  window.addEventListener('beforeunload', () => clearInterval(localTimer), { once: true });
+  scheduleLocalCheck();
+  window.addEventListener('beforeunload', () => clearTimeout(localTimer), { once: true });
 })();

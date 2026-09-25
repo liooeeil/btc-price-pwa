@@ -8,6 +8,9 @@
     emaCross1w: 7 * 24 * 60 * 60,
     flat1d: 24 * 60 * 60,
     flat3d: 3 * 24 * 60 * 60,
+    fractal6h: 6 * 60 * 60,
+    fractal1d: 24 * 60 * 60,
+    fractal1w: 7 * 24 * 60 * 60,
   };
 
   function confirmed(bars) {
@@ -113,12 +116,36 @@
     return events;
   }
 
+  function fractalEvents(bars, strategy, includeCurrent = false, lookback = 20) {
+    const data = includeCurrent ? evaluationBars(bars) : confirmed(bars);
+    const count = Math.max(1, Math.min(500, Math.round(Number(lookback) || 20)));
+    const events = [];
+    for (let i = Math.max(count + 1, 2); i < data.length; i++) {
+      const a = data[i - 2], middle = data[i - 1], c = data[i];
+      if (!a || !middle || !c || (!includeCurrent && String(c.confirm) !== '1')) continue;
+      const past = data.slice(i - 1 - count, i - 1);
+      if (past.length < count) continue;
+      const high = Math.max(...past.map((bar) => bar.high));
+      const low = Math.min(...past.map((bar) => bar.low));
+      const top = middle.high > high && middle.high > a.high && middle.high > c.high &&
+        c.close < middle.open && c.close < middle.close && c.close < c.open;
+      const bottom = middle.low < low && middle.low < a.low && middle.low < c.low &&
+        c.close > middle.open && c.close > middle.close && c.close > c.open;
+      for (const [isMatch, direction, pivotPrice] of [[top, 'top', middle.high], [bottom, 'bottom', middle.low]]) {
+        if (!isMatch) continue;
+        events.push({ strategy, direction, time: c.time, pivotTime: middle.time, closeTime: c.time + SECONDS[strategy], close: c.close, pivotPrice });
+      }
+    }
+    return events;
+  }
+
   function events(strategy, bars, options = {}) {
     if (strategy === 'emaCross' || strategy === 'emaCross4h' || strategy === 'emaCross1d' || strategy === 'emaCross1w') {
       return emaCrossEvents(bars, strategy, !!options.includeCurrent);
     }
     if (strategy === 'flat1d') return flatEvents(bars, { ...options, timeframe: '1D' });
     if (strategy === 'flat3d') return flatEvents(bars, { ...options, timeframe: '3D' });
+    if (strategy === 'fractal6h' || strategy === 'fractal1d' || strategy === 'fractal1w') return fractalEvents(bars, strategy, !!options.includeCurrent, options.lookback);
     return [];
   }
 
@@ -126,19 +153,22 @@
     return events(strategy, bars, { ...options, includeCurrent: true });
   }
 
-  root.TideAlertRules = { SECONDS, confirmed, evaluationBars, ema, smooth, emaCrossEvents, flatMetricsAt, flatEvents, events, previewEvents };
+  root.TideAlertRules = { SECONDS, confirmed, evaluationBars, ema, smooth, emaCrossEvents, flatMetricsAt, flatEvents, fractalEvents, events, previewEvents };
 })(globalThis);
 
 
 const RULES = globalThis.TideAlertRules;
 const APP_ORIGIN = 'https://liooeeil.github.io';
-const STRATEGIES = ['emaCross4h', 'emaCross1d', 'emaCross1w', 'flat1d', 'flat3d'];
+const STRATEGIES = ['emaCross4h', 'emaCross1d', 'emaCross1w', 'flat1d', 'flat3d', 'fractal6h', 'fractal1d', 'fractal1w'];
 const BARS = {
   emaCross4h: '4H',
   emaCross1d: '1Dutc',
   emaCross1w: '1Wutc',
   flat1d: '1Dutc',
   flat3d: '3Dutc',
+  fractal6h: '6H',
+  fractal1d: '1Dutc',
+  fractal1w: '1Wutc',
 };
 const TITLES = {
   emaCross4h: '4小时 EMA 5/20 交叉',
@@ -146,6 +176,9 @@ const TITLES = {
   emaCross1w: '周线 EMA 5/20 交叉',
   flat1d: '日线 SMA 走平',
   flat3d: '3日线 SMA 走平',
+  fractal6h: '6 小时分型',
+  fractal1d: '日线分型',
+  fractal1w: '周线分型',
 };
 const MAX_SYMBOLS = 8;
 
@@ -170,20 +203,32 @@ function isAllowedSymbol(value) {
 
 function normalizeConfig(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('配置格式无效');
-  const symbols = [...new Set(Array.isArray(input.symbols) ? input.symbols.filter(isAllowedSymbol) : [])];
-  if (!symbols.length) throw new Error('至少需要一个有效的 USDT 永续合约');
-  if (symbols.length > MAX_SYMBOLS) throw new Error('服务器提醒最多支持 8 个品种，请从观察列表中减少后再同步');
-  const enabled = {};
-  for (const name of STRATEGIES) enabled[name] = input.enabled?.[name] === true;
-  const thresholds = {};
-  for (const name of ['flat1d', 'flat3d']) {
-    thresholds[name] = {};
-    for (const field of ['slopePct', 'spreadPct', 'bodyDistancePct']) {
-      const value = Number(input[field]?.[name]);
-      thresholds[name][field] = Number.isFinite(value) ? Math.max(0, Math.min(20, value)) : null;
-    }
+  if (Number(input.schemaVersion) !== 3 || !input.configs || typeof input.configs !== 'object' || Array.isArray(input.configs)) {
+    throw new Error('请刷新 BTC 页面后再同步合约独立的提醒设置');
   }
-  return { schemaVersion: 1, enabled, symbols, thresholds };
+  const configs = {};
+  for (const [symbol, raw] of Object.entries(input.configs)) {
+    if (!isAllowedSymbol(symbol) || !raw || typeof raw !== 'object') continue;
+    const enabled = {};
+    for (const name of STRATEGIES) enabled[name] = raw.enabled?.[name] === true;
+    if (!Object.values(enabled).some(Boolean)) continue;
+    const thresholds = {};
+    for (const name of ['flat1d', 'flat3d']) {
+      thresholds[name] = {};
+      for (const field of ['slopePct', 'spreadPct', 'bodyDistancePct']) {
+        const value = Number(raw[field]?.[name]);
+        thresholds[name][field] = Number.isFinite(value) ? Math.max(0, Math.min(20, value)) : null;
+      }
+    }
+    const fractalLookbacks = {};
+    for (const name of ['fractal6h', 'fractal1d', 'fractal1w']) {
+      const value = Number(raw.fractalLookbacks?.[name]);
+      fractalLookbacks[name] = Number.isFinite(value) ? Math.max(1, Math.min(500, Math.round(value))) : 20;
+    }
+    configs[symbol] = { enabled, thresholds, fractalLookbacks };
+  }
+  if (Object.keys(configs).length > MAX_SYMBOLS) throw new Error('服务器提醒最多支持 8 个已设置提醒的合约');
+  return { schemaVersion: 3, configs };
 }
 
 function optionsFor(config, strategy) {
@@ -196,6 +241,7 @@ function optionsFor(config, strategy) {
     slopePct: values.slopePct ?? defaults.slopePct,
     spreadPct: values.spreadPct ?? defaults.spreadPct,
     bodyDistancePct: values.bodyDistancePct ?? defaults.bodyDistancePct,
+    lookback: config.fractalLookbacks?.[strategy] ?? 20,
   };
 }
 
@@ -243,9 +289,9 @@ async function fetchBars(symbol, timeframe) {
 }
 
 function alertText(symbol, strategy, event) {
-  const direction = event.direction === 'up' ? '向上交叉' : event.direction === 'down' ? '向下交叉' : '';
+  const direction = event.direction === 'up' ? '向上交叉' : event.direction === 'down' ? '向下交叉' : event.direction === 'top' ? '顶分型' : event.direction === 'bottom' ? '底分型' : '';
   const label = event.preclose ? '预收盘参考价' : '收盘价';
-  const timing = event.preclose ? '（收盘前约 3 分钟）' : '';
+  const timing = event.preclose ? '（收盘前约 1 分钟）' : '';
   return symbol.replace('-USDT-SWAP', '') + ' · ' + TITLES[strategy] + ' ' + direction + timing +
     '\n' + label + '：' + Number(event.close).toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
@@ -288,37 +334,42 @@ async function handleRequest(request, env) {
     if (url.pathname === '/api/config') {
       const config = normalizeConfig(await request.json());
       await env.ALERT_KV.put('config', JSON.stringify(config));
-      return json({ ok: true, symbols: config.symbols.length }, 200, origin);
+      return json({ ok: true, symbols: Object.keys(config.configs).length }, 200, origin);
     }
     if (!env.TELEGRAM_BOT_TOKEN) return json({ error: 'Worker 尚未设置 TELEGRAM_BOT_TOKEN' }, 500, origin);
     await connectTelegram(env);
     return json({ ok: true }, 200, origin);
   } catch (error) {
-    const status = /配置格式|至少需要|最多支持|有效的/.test(error.message) ? 400 : 502;
+      const status = /配置格式|至少需要|最多支持|有效的|请刷新 BTC 页面/.test(error.message) ? 400 : 502;
     return json({ error: error.message || '请求失败' }, status, origin);
   }
 }
 
-async function evaluateAlerts(env) {
+async function evaluateAlerts(env, scheduleWindow) {
   if (!env.ALERT_KV || !env.TELEGRAM_BOT_TOKEN) return;
   const config = await env.ALERT_KV.get('config', 'json');
   const chatId = await env.ALERT_KV.get('telegram:chat-id');
-  if (!config || !chatId) return;
-  const active = STRATEGIES.filter((name) => config.enabled?.[name]);
-  if (!active.length) return;
+  if (!config || !chatId || config.schemaVersion !== 3) return;
+  const configured = Object.entries(config.configs || {}).map(([symbol, item]) => ({
+    symbol,
+    item,
+    active: STRATEGIES.filter((name) => item.enabled?.[name] &&
+      (!scheduleWindow.sixHourOnly || name === 'fractal6h') &&
+      (name !== 'fractal6h' || scheduleWindow.sixHourWindow)),
+  })).filter(({ symbol, item, active }) => isAllowedSymbol(symbol) && item && active.length);
+  if (!configured.length) return;
 
   const state = await env.ALERT_KV.get('state', 'json') || { checkpoints: {}, prealerts: {} };
   const candleCache = new Map();
   const notices = [];
   let cursor = 0;
   const jobs = [];
-  for (const symbol of config.symbols || []) {
-    if (!isAllowedSymbol(symbol)) continue;
+  for (const { symbol, item: symbolConfig, active } of configured) {
     for (const strategy of active) {
       const timeframe = BARS[strategy];
       const cacheKey = symbol + '|' + timeframe;
       if (!candleCache.has(cacheKey)) candleCache.set(cacheKey, null);
-      jobs.push({ symbol, strategy, cacheKey, timeframe });
+      jobs.push({ symbol, strategy, cacheKey, timeframe, config: symbolConfig });
     }
   }
 
@@ -335,13 +386,13 @@ async function evaluateAlerts(env) {
 
     const key = job.symbol + '|' + job.strategy;
     const now = Math.floor(Date.now() / 1000);
-    const opts = optionsFor(config, job.strategy);
+    const opts = optionsFor(job.config, job.strategy);
     const previousPrealert = Number(state.prealerts[key] || 0);
     const current = RULES.evaluationBars(bars).at(-1);
     if (current && String(current.confirm) === '0') {
       const closeTime = current.time + RULES.SECONDS[job.strategy];
       const remaining = closeTime - now;
-      if (remaining > 0 && remaining <= 3 * 60 && previousPrealert < current.time) {
+      if (remaining > 0 && remaining <= 60 && previousPrealert < current.time) {
         const preview = RULES.previewEvents(job.strategy, bars, opts)
           .find((event) => event.time === current.time && event.closeTime === closeTime);
         if (preview) {
@@ -356,9 +407,9 @@ async function evaluateAlerts(env) {
       const eligible = RULES.events(job.strategy, bars, opts).filter((event) => {
         if (event.closeTime > now || Number(state.prealerts[key] || 0) === event.time) return false;
         if (previous) return event.time > previous;
-        return job.strategy.startsWith('emaCross') &&
+        return (job.strategy.startsWith('emaCross') || job.strategy.startsWith('fractal')) &&
           event.time === latest.time &&
-          event.closeTime >= now - 6 * 60 * 60;
+          event.closeTime >= now - RULES.SECONDS[job.strategy];
       });
       for (const event of eligible) notices.push(alertText(job.symbol, job.strategy, event));
       state.checkpoints[key] = latest.time;
@@ -388,7 +439,12 @@ export default {
   },
   async scheduled(controller, env) {
     try {
-      await evaluateAlerts(env);
+      const scheduled = new Date(controller.scheduledTime);
+      const hour = scheduled.getUTCHours();
+      const minute = scheduled.getUTCMinutes();
+      const sixHourOnly = (minute === 59 && [5, 17].includes(hour)) || (minute === 2 && [6, 18].includes(hour));
+      const sixHourWindow = sixHourOnly || (minute === 59 && [11, 23].includes(hour)) || (minute === 2 && [0, 12].includes(hour));
+      await evaluateAlerts(env, { sixHourOnly, sixHourWindow });
     } catch (error) {
       console.error('Scheduled alert check failed:', error.message);
     }
