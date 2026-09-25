@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tide-btc-alerts",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-25",
+  "kv_namespaces": [
+    {
+      "binding": "ALERT_KV",
+      "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+    }
+  ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  }
+}

@@ -120,8 +120,9 @@
         <label>Worker 地址<input type="url" id="alertServerUrl" placeholder="https://你的服务.workers.dev"></label>
         <label>管理密钥<input type="password" id="alertServerKey" autocomplete="off" placeholder="部署时设置的 ADMIN_KEY"></label>
         <button type="button" class="action" id="alertSyncServer">保存并同步服务器策略</button>
+        <button type="button" class="action" id="alertTelegramConnect">绑定 Telegram 并发送测试</button>
         <span id="alertServerStatus">填入 Worker 地址和密钥后即可同步</span>
-        <p>服务器会在 K 线收盘前约 3 分钟预判，并在收盘后 1 分钟补查；通过 Telegram 推送。预收盘参考价可能在 K 线结束前变化，需先部署 Worker 并配置 Telegram 机器人。</p>
+        <p>先在 Telegram 向机器人发送 /start，再点“绑定 Telegram 并发送测试”。服务器会在 K 线收盘前约 3 分钟预判，并在收盘后 1 分钟补查；服务器提醒最多监控观察列表前 8 个品种。</p>
       </div>
       <div class="alert-log-head"><strong>最近提醒</strong><button type="button" id="alertClearLog">清除</button></div>
       <ol class="alert-log" id="alertLog" aria-live="polite"><li class="alert-empty">还没有触发提醒</li></ol>
@@ -215,6 +216,7 @@
       save();
     });
     card.querySelector('#alertSyncServer').onclick = syncServer;
+    card.querySelector('#alertTelegramConnect').onclick = connectTelegram;
     card.querySelector('#alertClearLog').onclick = () => {
       card.querySelector('#alertLog').innerHTML = '<li class="alert-empty">还没有触发提醒</li>';
       try { localStorage.removeItem('tide:alerts:log:v1'); } catch {}
@@ -377,7 +379,7 @@
       spreadPct: { ...settings.spreadPct },
       slopePct: { ...settings.slopePct },
       bodyDistancePct: { ...settings.bodyDistancePct },
-      symbols: symbols(),
+      symbols: symbols().slice(0, 8),
     };
   }
   async function syncServer() {
@@ -403,6 +405,28 @@
       if (status) status.textContent = `已同步 · ${body.symbols ?? symbols().length} 个品种`;
     } catch (error) {
       if (status) status.textContent = `同步失败：${error.message}`;
+    }
+  }
+  async function connectTelegram() {
+    const base = (document.querySelector('#alertServerUrl')?.value || settings.serverUrl || '').trim().replace(/\/$/, '');
+    const key = document.querySelector('#alertServerKey')?.value || settings.serverKey || '';
+    const status = document.querySelector('#alertServerStatus');
+    if (!base || !key) {
+      if (status) status.textContent = '请先填写 Worker 地址和管理密钥';
+      return;
+    }
+    if (status) status.textContent = '正在绑定 Telegram…';
+    try {
+      const response = await fetch(base + '/api/telegram/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Key': key },
+        body: '{}',
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || ('HTTP ' + response.status));
+      if (status) status.textContent = 'Telegram 已绑定 · 测试通知已发送';
+    } catch (error) {
+      if (status) status.textContent = '绑定失败：' + error.message;
     }
   }
   let syncTimer = null;

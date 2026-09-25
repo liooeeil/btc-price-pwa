@@ -8,7 +8,10 @@
 - `manifest.webmanifest`：主屏幕名称、图标、独立窗口模式和相对路径配置
 - `sw.js`：缓存应用外壳；断网时可重新打开已缓存的页面，但行情和外部图表库仍需联网
 - `alert-rules.js`、`alert-runtime.js`：原提醒逻辑
-- `icon-*.png`：主屏幕图标和 PWA 图标
+- `icons/`：主屏幕图标和 PWA 图标
+- worker/：可选的 Cloudflare Worker Telegram 服务器提醒
+
+Telegram 服务器提醒部署步骤见 [README_Telegram推送.md](README_Telegram推送.md)。未部署 Worker 时，页面本地提醒仍可用，但手机应用关闭后不能持续检查。
 
 ## Windows 上用 GitHub Pages 免费部署
 

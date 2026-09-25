@@ -1,14 +1,14 @@
-const CACHE_NAME = 'tide-btc-shell-v1';
+const CACHE_NAME = 'tide-btc-shell-v2';
 const APP_SHELL = [
   './',
   './index.html',
   './manifest.webmanifest',
   './alert-rules.js',
   './alert-runtime.js',
-  './icon-180.png',
-  './icon-192.png',
-  './icon-512.png',
-  './icon-maskable-512.png'
+  './icons/icon-180.png',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/icon-maskable-512.png'
 ];
 
 self.addEventListener('install', (event) => {
