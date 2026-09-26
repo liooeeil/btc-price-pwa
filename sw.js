@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tide-btc-shell-v6';
+const CACHE_NAME = 'tide-btc-shell-v7';
 const APP_SHELL = [
   './',
   './index.html',
@@ -56,3 +56,4 @@ self.addEventListener('fetch', (event) => {
     return response;
   })());
 });
+
