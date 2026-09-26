@@ -607,9 +607,6 @@
       if (status) status.textContent = '绑定失败：' + error.message;
     }
   }
-  document.querySelector('#alertBarkTest')?.addEventListener('click', testBark);
-  document.querySelector('#alertServerUrl')?.addEventListener('change', checkPushStatus);
-  checkPushStatus();
   let syncTimer = null;
   function scheduleServerSync() {
     if (!settings.serverUrl || !settings.serverKey) return;
@@ -641,6 +638,9 @@
   }
 
   makePanel();
+  document.querySelector('#alertBarkTest')?.addEventListener('click', testBark);
+  document.querySelector('#alertServerUrl')?.addEventListener('change', checkPushStatus);
+  checkPushStatus();
   if (migratedSettings) {
     save();
     if (settings.serverUrl && settings.serverKey) setTimeout(syncServer, 1200);
@@ -651,4 +651,5 @@
   scheduleLocalCheck();
   window.addEventListener('beforeunload', () => clearTimeout(localTimer), { once: true });
 })();
+
 
