@@ -265,6 +265,26 @@ async function sendTelegram(env, chatId, text) {
   });
 }
 
+async function sendBark(env, title, text) {
+  if (!env.BARK_KEY) throw new Error('Worker 未设置 BARK_KEY');
+  const response = await fetch('https://api.day.app/push', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      device_key: env.BARK_KEY,
+      title,
+      body: text,
+      group: 'Tide BTC',
+      sound: 'alarm',
+      level: 'timeSensitive',
+    }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body.code !== 200) {
+    throw new Error(body.message || ('Bark HTTP ' + response.status));
+  }
+}
+
 async function authorized(request, env) {
   const supplied = request.headers.get('X-Admin-Key') || '';
   return !!env.ADMIN_KEY && supplied === env.ADMIN_KEY;
@@ -321,9 +341,9 @@ async function handleRequest(request, env) {
   const url = new URL(request.url);
   if (request.method === 'OPTIONS') return json({ ok: true }, 200, origin);
   if (url.pathname === '/api/health' && request.method === 'GET') {
-    return json({ ok: true, telegramConfigured: !!env.TELEGRAM_BOT_TOKEN }, 200, origin);
+    return json({ ok: true, telegramConfigured: !!env.TELEGRAM_BOT_TOKEN, barkConfigured: !!env.BARK_KEY }, 200, origin);
   }
-  if (url.pathname !== '/api/config' && url.pathname !== '/api/telegram/connect') {
+  if (url.pathname !== '/api/config' && url.pathname !== '/api/telegram/connect' && url.pathname !== '/api/bark/test') {
     return json({ error: 'Not found' }, 404, origin);
   }
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405, origin);
@@ -335,6 +355,11 @@ async function handleRequest(request, env) {
       const config = normalizeConfig(await request.json());
       await env.ALERT_KV.put('config', JSON.stringify(config));
       return json({ ok: true, symbols: Object.keys(config.configs).length }, 200, origin);
+    }
+    if (url.pathname === '/api/bark/test') {
+      if (!env.BARK_KEY) return json({ error: 'Worker 尚未设置 BARK_KEY' }, 500, origin);
+      await sendBark(env, '潮汐 BTC Bark 测试', 'Bark 推送已连接。');
+      return json({ ok: true }, 200, origin);
     }
     if (!env.TELEGRAM_BOT_TOKEN) return json({ error: 'Worker 尚未设置 TELEGRAM_BOT_TOKEN' }, 500, origin);
     await connectTelegram(env);
@@ -428,7 +453,16 @@ async function evaluateAlerts(env, scheduleWindow) {
   }
   await Promise.all(Array.from({ length: Math.min(5, jobs.length) }, () => worker()));
   if (notices.length) {
-    await sendTelegram(env, chatId, '潮汐 BTC 行情提醒\n\n' + notices.join('\n\n'));
+    const message = notices.join('\n\n');
+    const results = await Promise.allSettled([
+      sendTelegram(env, chatId, '潮汐 BTC 行情提醒\n\n' + message),
+      sendBark(env, '潮汐 BTC 行情提醒', message),
+    ]);
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        console.warn('Push failed:', result.reason?.message || result.reason);
+      }
+    }
   }
   await env.ALERT_KV.put('state', JSON.stringify(state));
 }
@@ -450,3 +484,4 @@ export default {
     }
   },
 };
+

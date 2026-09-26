@@ -159,13 +159,15 @@
         <div class="alert-strategy-body"><p>顶、底分型分别提醒，使用形态页的前序比较规则。</p></div>
       </div>
       <div class="alert-server">
-        <strong>服务器推送 · Telegram</strong>
+        <strong>服务器推送 · Telegram + Bark</strong>
         <label>Worker 地址<input type="url" id="alertServerUrl" placeholder="https://你的服务.workers.dev"></label>
         <label>管理密钥<input type="password" id="alertServerKey" autocomplete="off" placeholder="部署时设置的 ADMIN_KEY"></label>
         <button type="button" class="action" id="alertSyncServer">保存并同步服务器策略</button>
         <button type="button" class="action" id="alertTelegramConnect">绑定 Telegram 并发送测试</button>
-        <span id="alertServerStatus">填入 Worker 地址和密钥后即可同步</span>
-        <p>提醒开关按当前合约分别保存；加入自选不会自动开启提醒。先在 Telegram 向机器人发送 /start，再点“绑定 Telegram 并发送测试”。</p>
+        <span id="alertBarkStatus">Bark 状态：尚未检查</span>
+         <button type="button" class="action" id="alertBarkTest">发送 Bark 测试</button>
+         <span id="alertServerStatus">填入 Worker 地址和密钥后即可同步</span>
+        <p>提醒开关按当前合约分别保存；加入自选不会自动开启提醒。先在 Telegram 向机器人发送 /start，再点“绑定 Telegram 并发送测试”。Bark 与 Telegram 分开发送，可分别测试。</p>
       </div>
       <div class="alert-log-head"><strong>最近提醒</strong><button type="button" id="alertClearLog">清除</button></div>
       <ol class="alert-log" id="alertLog" aria-live="polite"><li class="alert-empty">还没有触发提醒</li></ol>
@@ -549,6 +551,40 @@
       if (status) status.textContent = `同步失败：${error.message}`;
     }
   }
+  async function checkPushStatus() {
+    const base = (document.querySelector('#alertServerUrl')?.value || settings.serverUrl || '').trim().replace(/\/$/, '');
+    const status = document.querySelector('#alertBarkStatus');
+    if (!base) { if (status) status.textContent = 'Bark 状态：请填写 Worker 地址'; return; }
+    if (status) status.textContent = 'Bark 状态：检查中…';
+    try {
+      const response = await fetch(base + '/api/health');
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || ('HTTP ' + response.status));
+      if (status) status.textContent = body.barkConfigured ? 'Bark 状态：已配置' : 'Bark 状态：Worker 未配置 BARK_KEY';
+    } catch (error) {
+      if (status) status.textContent = 'Bark 状态：检查失败 · ' + error.message;
+    }
+  }
+  async function testBark() {
+    const base = (document.querySelector('#alertServerUrl')?.value || settings.serverUrl || '').trim().replace(/\/$/, '');
+    const key = document.querySelector('#alertServerKey')?.value || settings.serverKey || '';
+    const status = document.querySelector('#alertBarkStatus');
+    if (!base || !key) { if (status) status.textContent = 'Bark 测试：请填写 Worker 地址和管理密钥'; return; }
+    settings.serverUrl = base; settings.serverKey = key; save();
+    if (status) status.textContent = 'Bark 测试发送中…';
+    try {
+      const response = await fetch(base + '/api/bark/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Key': key },
+        body: '{}',
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || ('HTTP ' + response.status));
+      if (status) status.textContent = 'Bark 测试已发送，请检查手机';
+    } catch (error) {
+      if (status) status.textContent = 'Bark 测试失败：' + error.message;
+    }
+  }
   async function connectTelegram() {
     const base = (document.querySelector('#alertServerUrl')?.value || settings.serverUrl || '').trim().replace(/\/$/, '');
     const key = document.querySelector('#alertServerKey')?.value || settings.serverKey || '';
@@ -571,6 +607,9 @@
       if (status) status.textContent = '绑定失败：' + error.message;
     }
   }
+  document.querySelector('#alertBarkTest')?.addEventListener('click', testBark);
+  document.querySelector('#alertServerUrl')?.addEventListener('change', checkPushStatus);
+  checkPushStatus();
   let syncTimer = null;
   function scheduleServerSync() {
     if (!settings.serverUrl || !settings.serverKey) return;
@@ -612,3 +651,4 @@
   scheduleLocalCheck();
   window.addEventListener('beforeunload', () => clearTimeout(localTimer), { once: true });
 })();
+
