@@ -291,27 +291,97 @@ async function authorized(request, env) {
 }
 
 async function fetchBars(symbol, timeframe) {
+  const requestStartedAt = new Date();
   const query = new URLSearchParams({ instId: symbol, bar: timeframe, limit: '300' });
-  const response = await fetch('https://www.okx.com/api/v5/market/candles?' + query);
-  const result = await response.json();
-  if (!response.ok || result.code !== '0' || !Array.isArray(result.data) || !result.data.length) {
-    throw new Error(result.msg || ('OKX HTTP ' + response.status));
+  let responseStatus = null;
+  let resultCode = null;
+  try {
+    const response = await fetch('https://www.okx.com/api/v5/market/candles?' + query);
+    responseStatus = response.status;
+    const result = await response.json();
+    resultCode = result.code ?? null;
+    const responseReceivedAt = new Date();
+    const api = {
+      requestStartedAt: requestStartedAt.toISOString(),
+      responseReceivedAt: responseReceivedAt.toISOString(),
+      elapsedMs: responseReceivedAt.getTime() - requestStartedAt.getTime(),
+      httpStatus: response.status,
+      okxCode: resultCode,
+      rowCount: Array.isArray(result.data) ? result.data.length : 0,
+    };
+    if (!response.ok || result.code !== '0' || !Array.isArray(result.data) || !result.data.length) {
+      const error = new Error(result.msg || ('OKX HTTP ' + response.status));
+      error.apiDiagnostic = { ...api, symbol, timeframe, okxMessage: result.msg || null };
+      throw error;
+    }
+    const bars = result.data.map((row) => ({
+      time: Math.floor(Number(row[0]) / 1000),
+      open: Number(row[1]),
+      high: Number(row[2]),
+      low: Number(row[3]),
+      close: Number(row[4]),
+      volume: Number(row[5]),
+      confirm: String(row[8]),
+    })).reverse();
+    return { bars, api };
+  } catch (error) {
+    if (!error.apiDiagnostic) {
+      const failedAt = new Date();
+      error.apiDiagnostic = {
+        symbol,
+        timeframe,
+        requestStartedAt: requestStartedAt.toISOString(),
+        failedAt: failedAt.toISOString(),
+        elapsedMs: failedAt.getTime() - requestStartedAt.getTime(),
+        httpStatus: responseStatus,
+        okxCode: resultCode,
+        error: error.message || String(error),
+      };
+    }
+    throw error;
   }
-  return result.data.map((row) => ({
-    time: Math.floor(Number(row[0]) / 1000),
-    open: Number(row[1]),
-    high: Number(row[2]),
-    low: Number(row[3]),
-    close: Number(row[4]),
-    volume: Number(row[5]),
-    confirm: String(row[8]),
-  })).reverse();
+}
+
+function candleSummary(bar, duration) {
+  if (!bar) return null;
+  return {
+    openTime: bar.time,
+    openTimeUtc: new Date(bar.time * 1000).toISOString(),
+    closeTimeUtc: new Date((bar.time + duration) * 1000).toISOString(),
+    close: bar.close,
+    confirm: String(bar.confirm),
+  };
+}
+
+function nearbyCandleBoundary(bars, duration, now, windowSeconds = 5 * 60) {
+  return bars.slice(-3)
+    .map((bar) => bar.time + duration)
+    .filter((closeTime) => Math.abs(now - closeTime) <= windowSeconds)
+    .sort((a, b) => Math.abs(now - a) - Math.abs(now - b))[0] || null;
+}
+
+function eventSummaries(events, boundary, duration) {
+  return events
+    .filter((event) => event.closeTime >= boundary - duration && event.closeTime <= boundary + duration)
+    .map((event) => ({
+      direction: event.direction,
+      openTimeUtc: new Date(event.time * 1000).toISOString(),
+      closeTimeUtc: new Date(event.closeTime * 1000).toISOString(),
+      close: event.close,
+    }));
+}
+
+function confirmElapsedCandles(bars, duration, now) {
+  // OKX can briefly leave a just-ended candle unconfirmed; do not wait another full bar.
+  return bars.map((bar) => String(bar.confirm) === '0' && bar.time + duration <= now
+    ? { ...bar, confirm: '1' }
+    : bar);
 }
 
 function alertText(symbol, strategy, event) {
   const direction = event.direction === 'up' ? '向上交叉' : event.direction === 'down' ? '向下交叉' : event.direction === 'top' ? '顶分型' : event.direction === 'bottom' ? '底分型' : '';
-  const label = event.preclose ? '预收盘参考价' : '收盘价';
-  const timing = event.preclose ? '（收盘前约 1 分钟）' : '';
+  const label = event.realtime ? '触发时参考价' : event.preclose ? '预收盘参考价' : '收盘价';
+  const timing = event.realtime ? '（4H 实时）' : event.preclose ? '（收盘前约 1 分钟）' : '';
   return symbol.replace('-USDT-SWAP', '') + ' · ' + TITLES[strategy] + ' ' + direction + timing +
     '\n' + label + '：' + Number(event.close).toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
@@ -371,22 +441,42 @@ async function handleRequest(request, env) {
 }
 
 async function evaluateAlerts(env, scheduleWindow) {
-  if (!env.ALERT_KV || !env.TELEGRAM_BOT_TOKEN) return;
+  if (!env.ALERT_KV) {
+    console.warn({ type: 'scheduled_skip', run: scheduleWindow.runInfo, reason: 'missing_ALERT_KV' });
+    return;
+  }
   const config = await env.ALERT_KV.get('config', 'json');
-  const chatId = await env.ALERT_KV.get('telegram:chat-id');
-  if (!config || !chatId || config.schemaVersion !== 3) return;
+  const chatId = env.TELEGRAM_BOT_TOKEN ? await env.ALERT_KV.get('telegram:chat-id') : null;
+  if (!config || config.schemaVersion !== 3 || (!chatId && !env.BARK_KEY)) {
+    console.warn({
+      type: 'scheduled_skip',
+      run: scheduleWindow.runInfo,
+      reason: !config ? 'missing_config' : config.schemaVersion !== 3 ? 'unsupported_config_schema' : 'no_push_channel',
+      schemaVersion: config?.schemaVersion ?? null,
+      telegramConfigured: !!env.TELEGRAM_BOT_TOKEN,
+      telegramChatBound: !!chatId,
+      barkConfigured: !!env.BARK_KEY,
+    });
+    return;
+  }
   const configured = Object.entries(config.configs || {}).map(([symbol, item]) => ({
     symbol,
     item,
     active: STRATEGIES.filter((name) => item.enabled?.[name] &&
+      (!scheduleWindow.realtimeOnly || name === 'emaCross4h') &&
       (!scheduleWindow.sixHourOnly || name === 'fractal6h') &&
       (name !== 'fractal6h' || scheduleWindow.sixHourWindow)),
   })).filter(({ symbol, item, active }) => isAllowedSymbol(symbol) && item && active.length);
-  if (!configured.length) return;
+  if (!configured.length) {
+    console.log({ type: 'scheduled_skip', run: scheduleWindow.runInfo, reason: 'no_active_strategies' });
+    return;
+  }
 
   const state = await env.ALERT_KV.get('state', 'json') || { checkpoints: {}, prealerts: {} };
+  const originalState = JSON.stringify(state);
   const candleCache = new Map();
   const notices = [];
+  const pendingCheckpoints = new Map();
   let cursor = 0;
   const jobs = [];
   for (const { symbol, item: symbolConfig, active } of configured) {
@@ -403,41 +493,125 @@ async function evaluateAlerts(env, scheduleWindow) {
       candleCache.set(job.cacheKey, fetchBars(job.symbol, job.timeframe));
     }
     const pending = candleCache.get(job.cacheKey);
-    const bars = await pending;
-    candleCache.set(job.cacheKey, bars);
+    const fetched = await pending;
+    candleCache.set(job.cacheKey, fetched);
+    const rawBars = fetched.bars;
+    const now = Math.floor(Date.now() / 1000);
+    const duration = RULES.SECONDS[job.strategy];
+    const bars = confirmElapsedCandles(rawBars, duration, now);
     const closed = RULES.confirmed(bars);
     const latest = closed.at(-1);
-    if (!latest) return;
-
     const key = job.symbol + '|' + job.strategy;
-    const now = Math.floor(Date.now() / 1000);
     const opts = optionsFor(job.config, job.strategy);
     const previousPrealert = Number(state.prealerts[key] || 0);
+    const previous = Number(state.checkpoints[key] || 0);
     const current = RULES.evaluationBars(bars).at(-1);
+    const boundary = job.strategy === 'emaCross4h'
+      ? nearbyCandleBoundary(rawBars, duration, now)
+      : null;
+    const shouldLogBoundary = boundary !== null;
+    let previewMatch = null;
+    let eligible = [];
+    let checkpointAction = 'unchanged';
+
+    if (!latest) {
+      if (shouldLogBoundary) {
+        console.log({
+          type: 'ema4h_boundary_diagnostic',
+          run: scheduleWindow.runInfo,
+          scheduleWindow: {
+            realtimeOnly: !!scheduleWindow.realtimeOnly,
+            sixHourOnly: !!scheduleWindow.sixHourOnly,
+            sixHourWindow: !!scheduleWindow.sixHourWindow,
+          },
+          symbol: job.symbol,
+          boundaryUtc: new Date(boundary * 1000).toISOString(),
+          checkedAtUtc: new Date(now * 1000).toISOString(),
+          api: fetched.api,
+          rawCandles: rawBars.slice(-3).map((bar) => candleSummary(bar, duration)),
+          effectiveCandles: bars.slice(-3).map((bar) => candleSummary(bar, duration)),
+          latestConfirmed: null,
+          stateBefore: {
+            checkpoint: previous,
+            checkpointUtc: previous ? new Date(previous * 1000).toISOString() : null,
+            prealert: previousPrealert,
+            prealertUtc: previousPrealert ? new Date(previousPrealert * 1000).toISOString() : null,
+          },
+          decision: 'no_confirmed_candle',
+        });
+      }
+      return;
+    }
+
     if (current && String(current.confirm) === '0') {
-      const closeTime = current.time + RULES.SECONDS[job.strategy];
+      const closeTime = current.time + duration;
       const remaining = closeTime - now;
-      if (remaining > 0 && remaining <= 60 && previousPrealert < current.time) {
-        const preview = RULES.previewEvents(job.strategy, bars, opts)
+      const realtimeEma = job.strategy === 'emaCross4h' && closeTime > now;
+      const nearClose = remaining > 0 && remaining <= 60;
+      if ((realtimeEma || nearClose) && previousPrealert < current.time) {
+        previewMatch = RULES.previewEvents(job.strategy, bars, opts)
           .find((event) => event.time === current.time && event.closeTime === closeTime);
-        if (preview) {
-          notices.push(alertText(job.symbol, job.strategy, { ...preview, preclose: true }));
-          state.prealerts[key] = current.time;
+        if (previewMatch) {
+          notices.push({
+            text: alertText(job.symbol, job.strategy, { ...previewMatch, preclose: !realtimeEma, realtime: realtimeEma }),
+            key,
+            prealertTime: current.time,
+          });
         }
       }
     }
 
-    const previous = Number(state.checkpoints[key] || 0);
     if (!previous || latest.time > previous) {
-      const eligible = RULES.events(job.strategy, bars, opts).filter((event) => {
+      eligible = RULES.events(job.strategy, bars, opts).filter((event) => {
         if (event.closeTime > now || Number(state.prealerts[key] || 0) === event.time) return false;
         if (previous) return event.time > previous;
         return (job.strategy.startsWith('emaCross') || job.strategy.startsWith('fractal')) &&
           event.time === latest.time &&
-          event.closeTime >= now - RULES.SECONDS[job.strategy];
+          event.closeTime >= now - duration;
       });
-      for (const event of eligible) notices.push(alertText(job.symbol, job.strategy, event));
-      state.checkpoints[key] = latest.time;
+      for (const event of eligible) notices.push({ text: alertText(job.symbol, job.strategy, event), key, checkpointTime: latest.time });
+      if (eligible.length) {
+        pendingCheckpoints.set(key, latest.time);
+        checkpointAction = 'pending_delivery';
+      } else {
+        state.checkpoints[key] = latest.time;
+        checkpointAction = 'advanced_without_alert';
+      }
+    }
+
+    if (shouldLogBoundary) {
+      const rangeEvents = (events) => eventSummaries(events, boundary, duration);
+      console.log({
+        type: 'ema4h_boundary_diagnostic',
+        run: scheduleWindow.runInfo,
+        scheduleWindow: {
+          realtimeOnly: !!scheduleWindow.realtimeOnly,
+          sixHourOnly: !!scheduleWindow.sixHourOnly,
+          sixHourWindow: !!scheduleWindow.sixHourWindow,
+        },
+        symbol: job.symbol,
+        boundaryUtc: new Date(boundary * 1000).toISOString(),
+        checkedAtUtc: new Date(now * 1000).toISOString(),
+        api: fetched.api,
+        rawCandles: rawBars.slice(-3).map((bar) => candleSummary(bar, duration)),
+        effectiveCandles: bars.slice(-3).map((bar) => candleSummary(bar, duration)),
+        latestConfirmed: candleSummary(latest, duration),
+        currentEvaluated: candleSummary(current, duration),
+        stateBefore: {
+          checkpoint: previous,
+          checkpointUtc: previous ? new Date(previous * 1000).toISOString() : null,
+          prealert: previousPrealert,
+          prealertUtc: previousPrealert ? new Date(previousPrealert * 1000).toISOString() : null,
+        },
+        stateDecision: checkpointAction,
+        previewQueued: !!previewMatch,
+        eligibleClosedCrosses: rangeEvents(eligible),
+        signals: {
+          rawConfirmed: rangeEvents(RULES.events(job.strategy, rawBars, opts)),
+          rawIncludingCurrent: rangeEvents(RULES.previewEvents(job.strategy, rawBars, opts)),
+          effectiveConfirmed: rangeEvents(RULES.events(job.strategy, bars, opts)),
+        },
+      });
     }
   }
 
@@ -447,24 +621,51 @@ async function evaluateAlerts(env, scheduleWindow) {
       try {
         await loadJob(job);
       } catch (error) {
-        console.warn('Alert check failed for ' + job.symbol + '/' + job.strategy + ': ' + error.message);
+        console.warn({
+          type: 'alert_job_failed',
+          run: scheduleWindow.runInfo,
+          symbol: job.symbol,
+          strategy: job.strategy,
+          timeframe: job.timeframe,
+          error: error.message || String(error),
+          api: error.apiDiagnostic || null,
+        });
       }
     }
   }
   await Promise.all(Array.from({ length: Math.min(5, jobs.length) }, () => worker()));
   if (notices.length) {
-    const message = notices.join('\n\n');
-    const results = await Promise.allSettled([
-      sendTelegram(env, chatId, '潮汐 BTC 行情提醒\n\n' + message),
-      sendBark(env, '潮汐 BTC 行情提醒', message),
-    ]);
+    const message = notices.map((notice) => notice.text).join('\n\n');
+    const deliveries = [];
+    if (chatId) deliveries.push({ channel: 'telegram', promise: sendTelegram(env, chatId, '潮汐 BTC 行情提醒\n\n' + message) });
+    if (env.BARK_KEY) deliveries.push({ channel: 'bark', promise: sendBark(env, '潮汐 BTC 行情提醒', message) });
+    const results = await Promise.allSettled(deliveries.map((delivery) => delivery.promise));
+    console.log({
+      type: 'alert_push_result',
+      run: scheduleWindow.runInfo,
+      alerts: notices.map(({ key, prealertTime, checkpointTime }) => ({ key, prealertTime: prealertTime || null, checkpointTime: checkpointTime || null })),
+      deliveries: results.map((result, index) => ({
+        channel: deliveries[index].channel,
+        status: result.status,
+        error: result.status === 'rejected' ? (result.reason?.message || String(result.reason)) : null,
+      })),
+    });
     for (const result of results) {
       if (result.status === 'rejected') {
         console.warn('Push failed:', result.reason?.message || result.reason);
       }
     }
+    if (results.some((result) => result.status === 'fulfilled')) {
+      for (const notice of notices) {
+        if (notice.prealertTime) state.prealerts[notice.key] = notice.prealertTime;
+      }
+      for (const [key, time] of pendingCheckpoints) state.checkpoints[key] = time;
+    }
   }
-  await env.ALERT_KV.put('state', JSON.stringify(state));
+  const nextState = JSON.stringify(state);
+  if (nextState !== originalState) {
+    await env.ALERT_KV.put('state', nextState);
+  }
 }
 
 export default {
@@ -472,16 +673,27 @@ export default {
     return handleRequest(request, env);
   },
   async scheduled(controller, env) {
+    const runInfo = {
+      scheduledTime: new Date(controller.scheduledTime).toISOString(),
+      actualStartedAt: new Date().toISOString(),
+      cron: controller.cron || null,
+    };
+    console.log({ type: 'scheduled_start', ...runInfo });
     try {
       const scheduled = new Date(controller.scheduledTime);
       const hour = scheduled.getUTCHours();
       const minute = scheduled.getUTCMinutes();
+      const regularCheck = (minute === 59 && [3, 5, 7, 11, 15, 17, 19, 23].includes(hour)) ||
+        (minute === 2 && [0, 4, 6, 8, 12, 16, 18, 20].includes(hour));
       const sixHourOnly = (minute === 59 && [5, 17].includes(hour)) || (minute === 2 && [6, 18].includes(hour));
       const sixHourWindow = sixHourOnly || (minute === 59 && [11, 23].includes(hour)) || (minute === 2 && [0, 12].includes(hour));
-      await evaluateAlerts(env, { sixHourOnly, sixHourWindow });
+      await evaluateAlerts(env, { sixHourOnly, sixHourWindow, realtimeOnly: !regularCheck, runInfo });
     } catch (error) {
-      console.error('Scheduled alert check failed:', error.message);
+      console.error({
+        type: 'scheduled_failed',
+        run: runInfo,
+        error: error.message || String(error),
+      });
     }
   },
 };
-

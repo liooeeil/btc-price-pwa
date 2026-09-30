@@ -3,6 +3,10 @@
   "name": "tide-btc-alerts",
   "main": "telegram-worker.js",
   "compatibility_date": "2026-09-25",
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
   "kv_namespaces": [
     {
       "binding": "ALERT_KV",
@@ -10,6 +14,6 @@
     }
   ],
   "triggers": {
-    "crons": ["59 3,5,7,11,15,17,19,23 * * *", "2 0,4,6,8,12,16,18,20 * * *"]
+    "crons": ["* * * * *"]
   }
 }

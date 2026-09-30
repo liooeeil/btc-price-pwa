@@ -127,8 +127,8 @@
       <div class="alert-card-content" id="alertCardContent">
       <p class="alert-scope">当前合约单独保存提醒。加入自选不会自动开启；切换合约后可分别设置。</p>
       <div class="alert-strategy" data-strategy="emaCross4h">
-        <div class="alert-strategy-head"><button class="alert-collapse" type="button" aria-expanded="false">4H EMA 5 / 20 交叉 <small>预收盘 · 1 分钟</small></button><label class="alert-enable"><input class="switch alert-switch" type="checkbox" data-alert-enable="emaCross4h">开启</label></div>
-        <div class="alert-strategy-body"><p>收盘前约 1 分钟，根据当前 K 线价格预判 EMA 5 / 20 上穿或下穿；若未触发，收盘后约 2 分钟补查。</p></div>
+        <div class="alert-strategy-head"><button class="alert-collapse" type="button" aria-expanded="false">4H EMA 5 / 20 交叉 <small>实时 · 每分钟</small></button><label class="alert-enable"><input class="switch alert-switch" type="checkbox" data-alert-enable="emaCross4h">开启</label></div>
+        <div class="alert-strategy-body"><p>服务器每分钟根据正在形成的 4H K 线检查 EMA 5 / 20 上穿或下穿；收盘后继续补查，避免交易所确认延迟。</p></div>
       </div>
       <div class="alert-strategy" data-strategy="emaCross1d">
         <div class="alert-strategy-head"><button class="alert-collapse" type="button" aria-expanded="false">日线 EMA 5 / 20 交叉 <small>预收盘 · 1 分钟</small></button><label class="alert-enable"><input class="switch alert-switch" type="checkbox" data-alert-enable="emaCross1d">开启</label></div>
@@ -169,8 +169,8 @@
          <span id="alertServerStatus">填入 Worker 地址和密钥后即可同步</span>
         <p>提醒开关按当前合约分别保存；加入自选不会自动开启提醒。先在 Telegram 向机器人发送 /start，再点“绑定 Telegram 并发送测试”。Bark 与 Telegram 分开发送，可分别测试。</p>
       </div>
-      <div class="alert-log-head"><strong>最近提醒</strong><button type="button" id="alertClearLog">清除</button></div>
-      <ol class="alert-log" id="alertLog" aria-live="polite"><li class="alert-empty">还没有触发提醒</li></ol>
+      <div class="alert-log-head"><strong>页面最近提醒</strong><button type="button" id="alertClearLog">清除</button></div>
+      <ol class="alert-log" id="alertLog" aria-live="polite"><li class="alert-empty">本页面还没有触发提醒；服务器推送不显示在这里</li></ol>
       </div><div class="alert-toast" id="alertToast" role="status" aria-live="assertive"></div>`;
     const css = document.createElement('style');
     css.textContent = `
@@ -297,7 +297,7 @@
     card.querySelector('#alertSyncServer').onclick = syncServer;
     card.querySelector('#alertTelegramConnect').onclick = connectTelegram;
     card.querySelector('#alertClearLog').onclick = () => {
-      card.querySelector('#alertLog').innerHTML = '<li class="alert-empty">还没有触发提醒</li>';
+      card.querySelector('#alertLog').innerHTML = '<li class="alert-empty">本页面还没有触发提醒；服务器推送不显示在这里</li>';
       try { localStorage.removeItem('tide:alerts:log:v1'); } catch {}
     };
     const log = readLog();
@@ -381,7 +381,7 @@
   function renderLog(items) {
     const list = document.querySelector('#alertLog');
     if (!list) return;
-    list.innerHTML = items.length ? items.slice(0, 8).map((item) => `<li><time>${item.time}</time> ${item.message}</li>`).join('') : '<li class="alert-empty">还没有触发提醒</li>';
+    list.innerHTML = items.length ? items.slice(0, 8).map((item) => `<li><time>${item.time}</time> ${item.message}</li>`).join('') : '<li class="alert-empty">本页面还没有触发提醒；服务器推送不显示在这里</li>';
   }
   function candleBar(strategy) {
     return ({
@@ -651,5 +651,3 @@
   scheduleLocalCheck();
   window.addEventListener('beforeunload', () => clearTimeout(localTimer), { once: true });
 })();
-
-
