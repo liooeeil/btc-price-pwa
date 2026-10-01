@@ -127,24 +127,24 @@
       <div class="alert-card-content" id="alertCardContent">
       <p class="alert-scope">当前合约单独保存提醒。加入自选不会自动开启；切换合约后可分别设置。</p>
       <div class="alert-strategy" data-strategy="emaCross4h">
-        <div class="alert-strategy-head"><button class="alert-collapse" type="button" aria-expanded="false">4H EMA 5 / 20 交叉 <small>实时 · 每分钟</small></button><label class="alert-enable"><input class="switch alert-switch" type="checkbox" data-alert-enable="emaCross4h">开启</label></div>
-        <div class="alert-strategy-body"><p>服务器每分钟根据正在形成的 4H K 线检查 EMA 5 / 20 上穿或下穿；收盘后继续补查，避免交易所确认延迟。</p></div>
+        <div class="alert-strategy-head"><button class="alert-collapse" type="button" aria-expanded="false">4H EMA 5 / 20 交叉 <small>边界前后 15 分钟</small></button><label class="alert-enable"><input class="switch alert-switch" type="checkbox" data-alert-enable="emaCross4h">开启</label></div>
+        <div class="alert-strategy-body"><p>服务器只在每个 4H 边界前后 15 分钟内逐分钟检查正在形成的 K 线；窗口外不请求行情。</p></div>
       </div>
       <div class="alert-strategy" data-strategy="emaCross1d">
         <div class="alert-strategy-head"><button class="alert-collapse" type="button" aria-expanded="false">日线 EMA 5 / 20 交叉 <small>预收盘 · 1 分钟</small></button><label class="alert-enable"><input class="switch alert-switch" type="checkbox" data-alert-enable="emaCross1d">开启</label></div>
-        <div class="alert-strategy-body"><p>收盘前约 1 分钟，根据当前 K 线价格预判 EMA 5 / 20 上穿或下穿；若未触发，收盘后约 2 分钟补查。</p></div>
+        <div class="alert-strategy-body"><p>收盘前约 1 分钟，根据当前 K 线价格预判 EMA 5 / 20 上穿或下穿；若未触发，收盘后在检查窗口内继续补查。</p></div>
       </div>
       <div class="alert-strategy" data-strategy="emaCross1w">
         <div class="alert-strategy-head"><button class="alert-collapse" type="button" aria-expanded="false">周线 EMA 5 / 20 交叉 <small>预收盘 · 1 分钟</small></button><label class="alert-enable"><input class="switch alert-switch" type="checkbox" data-alert-enable="emaCross1w">开启</label></div>
-        <div class="alert-strategy-body"><p>收盘前约 1 分钟，根据当前 K 线价格预判 EMA 5 / 20 上穿或下穿；若未触发，收盘后约 2 分钟补查。</p></div>
+        <div class="alert-strategy-body"><p>收盘前约 1 分钟，根据当前 K 线价格预判 EMA 5 / 20 上穿或下穿；若未触发，收盘后在检查窗口内继续补查。</p></div>
       </div>
       <div class="alert-strategy" data-strategy="flat1d">
         <div class="alert-strategy-head"><button class="alert-collapse" type="button" aria-expanded="false">日线 SMA 走平 <small>预收盘 · 1 分钟</small></button><label class="alert-enable"><input class="switch alert-switch" type="checkbox" data-alert-enable="flat1d">开启</label></div>
-        <div class="alert-strategy-body"><p>收盘前约 1 分钟，用当前 K 线价格计算 SMA 5/8/13 走平、SMA 5/13 间距和价格偏离；收盘后约 2 分钟补查。</p><label class="alert-threshold">三线变动率上限 <input type="number" min="0" max="20" step="0.1" data-slope="flat1d"> %</label><label class="alert-threshold">SMA 5 / 13 间距 <input type="number" min="0.1" max="20" step="0.1" data-spread="flat1d"> %</label><label class="alert-threshold">收盘价距 SMA 5 <input type="number" min="0" max="20" step="0.1" data-body-distance="flat1d"> %</label></div>
+        <div class="alert-strategy-body"><p>收盘前约 1 分钟，用当前 K 线价格计算 SMA 5/8/13 走平、SMA 5/13 间距和价格偏离；若未触发，收盘后在检查窗口内继续补查。</p><label class="alert-threshold">三线变动率上限 <input type="number" min="0" max="20" step="0.1" data-slope="flat1d"> %</label><label class="alert-threshold">SMA 5 / 13 间距 <input type="number" min="0.1" max="20" step="0.1" data-spread="flat1d"> %</label><label class="alert-threshold">收盘价距 SMA 5 <input type="number" min="0" max="20" step="0.1" data-body-distance="flat1d"> %</label></div>
       </div>
       <div class="alert-strategy" data-strategy="flat3d">
         <div class="alert-strategy-head"><button class="alert-collapse" type="button" aria-expanded="false">3 日线 SMA 走平 <small>预收盘 · 1 分钟</small></button><label class="alert-enable"><input class="switch alert-switch" type="checkbox" data-alert-enable="flat3d">开启</label></div>
-        <div class="alert-strategy-body"><p>收盘前约 1 分钟，用当前 K 线价格按 3 日线规则计算；若未触发，收盘后约 2 分钟补查。</p><label class="alert-threshold">三线变动率上限 <input type="number" min="0" max="20" step="0.1" data-slope="flat3d"> %</label><label class="alert-threshold">SMA 5 / 13 间距 <input type="number" min="0" max="20" step="0.1" data-spread="flat3d"> %</label><label class="alert-threshold">收盘价距 SMA 5 <input type="number" min="0" max="20" step="0.1" data-body-distance="flat3d"> %</label></div>
+        <div class="alert-strategy-body"><p>收盘前约 1 分钟，用当前 K 线价格按 3 日线规则计算；若未触发，收盘后在检查窗口内继续补查。</p><label class="alert-threshold">三线变动率上限 <input type="number" min="0" max="20" step="0.1" data-slope="flat3d"> %</label><label class="alert-threshold">SMA 5 / 13 间距 <input type="number" min="0" max="20" step="0.1" data-spread="flat3d"> %</label><label class="alert-threshold">收盘价距 SMA 5 <input type="number" min="0" max="20" step="0.1" data-body-distance="flat3d"> %</label></div>
       </div>
       <div class="alert-strategy" data-strategy="fractal6h">
         <div class="alert-strategy-head"><button class="alert-collapse" type="button" aria-expanded="false">6 小时顶 / 底分型 <small>收盘确认</small></button><label class="alert-enable"><input class="switch alert-switch" type="checkbox" data-alert-enable="fractal6h">开启</label></div>
@@ -167,7 +167,7 @@
         <span id="alertBarkStatus">Bark 状态：尚未检查</span>
          <button type="button" class="action" id="alertBarkTest">发送 Bark 测试</button>
          <span id="alertServerStatus">填入 Worker 地址和密钥后即可同步</span>
-        <p>提醒开关按当前合约分别保存；加入自选不会自动开启提醒。先在 Telegram 向机器人发送 /start，再点“绑定 Telegram 并发送测试”。Bark 与 Telegram 分开发送，可分别测试。</p>
+        <p>服务器在窗口内同时检查 OKX 和 Binance 的 USDT 本位永续行情，任一来源满足条件就推送；同一根 K 线的双源信号会合并。日线、周线和 6 小时策略只在各自收盘窗口检查。提醒开关按当前合约分别保存；加入自选不会自动开启提醒。先在 Telegram 向机器人发送 /start，再点“绑定 Telegram 并发送测试”。Bark 与 Telegram 分开发送，可分别测试。</p>
       </div>
       <div class="alert-log-head"><strong>页面最近提醒</strong><button type="button" id="alertClearLog">清除</button></div>
       <ol class="alert-log" id="alertLog" aria-live="polite"><li class="alert-empty">本页面还没有触发提醒；服务器推送不显示在这里</li></ol>
